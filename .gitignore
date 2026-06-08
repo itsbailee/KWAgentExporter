@@ -1,0 +1,8 @@
+node_modules/
+dist/
+session-backups/
+.DS_Store
+kw-inspect-output.json
+inspect-kw.js
+inspect-brokerages.js
+*.tiff

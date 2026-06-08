@@ -1,0 +1,54 @@
+{
+  "name": "kw-agent-exporter",
+  "version": "1.0.0",
+  "description": "Keller Williams branch agent CSV exporter",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "icon": "python3 scripts/make_icon.py",
+    "prebuild": "npm run icon",
+    "build": "electron-builder --mac dmg",
+    "postinstall": "plutil -replace CFBundleName -string 'KW Agent CSV Exporter' node_modules/electron/dist/Electron.app/Contents/Info.plist && plutil -replace CFBundleDisplayName -string 'KW Agent CSV Exporter' node_modules/electron/dist/Electron.app/Contents/Info.plist && plutil -replace CFBundleIdentifier -string 'com.local.kwagentexporter' node_modules/electron/dist/Electron.app/Contents/Info.plist || true"
+  },
+  "build": {
+    "appId": "com.local.kwagentexporter",
+    "productName": "KW Agent CSV Exporter",
+    "mac": {
+      "identity": null,
+      "icon": "assets/AppIcon.png",
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "darkModeSupport": true
+    },
+    "dmg": {
+      "title": "KW Agent CSV Exporter",
+      "window": {
+        "width": 580,
+        "height": 360
+      }
+    },
+    "files": [
+      "**/*",
+      "!node_modules/.cache/**",
+      "!inspect-kw.js",
+      "!kw-inspect-output.json",
+      "!assets/AppIcon.tiff"
+    ],
+    "electronVersion": "33.4.11"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^26.8.1"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.100.1"
+  }
+}

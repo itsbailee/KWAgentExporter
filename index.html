@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KW Agent CSV Exporter</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="controls">
+      <label for="city">Search KW agents by city</label>
+      <div class="search-row">
+        <div class="autocomplete-wrap">
+          <input id="city" type="text" spellcheck="false" autocomplete="off"
+            placeholder="e.g. Tampa, Charlotte NC, Tampa Florida">
+          <div id="suggestions" class="suggestions"></div>
+        </div>
+        <select id="radius">
+          <option value="15">15 mi</option>
+          <option value="30" selected>30 mi</option>
+          <option value="50">50 mi</option>
+          <option value="75">75 mi</option>
+          <option value="100">100 mi</option>
+          <option value="1000">1,000 mi</option>
+          <option value="3000">3,000 mi</option>
+        </select>
+      </div>
+      <div class="filter-row">
+        <input id="areaFilter" type="text" spellcheck="false" autocomplete="off"
+          placeholder="Filter by area code: 727, 239, 813, 850">
+      </div>
+      <div class="actions">
+        <button id="start">Start</button>
+        <button id="stop" disabled>Stop</button>
+        <button id="download" disabled>Download CSV</button>
+        <button id="clear" disabled>Clear</button>
+      </div>
+      <div class="status">
+        <span id="statusText">Idle</span>
+        <span id="count">0 agents</span>
+      </div>
+    </section>
+
+    <section class="url-section controls">
+      <label for="urlInput">Scrape any brokerage site</label>
+      <div class="url-row">
+        <input id="urlInput" type="text" spellcheck="false" autocomplete="off"
+          placeholder="https://example.com/our-agents/">
+        <button id="urlStart">Extract</button>
+      </div>
+      <div id="apiKeySetup" class="apikey-row" style="display:none">
+        <input id="apiKeyInput" type="password" placeholder="Anthropic API key  (sk-ant-...)">
+        <button id="apiKeySave">Save Key</button>
+      </div>
+    </section>
+
+    <section class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Brokerage</th>
+            <th>Phone</th>
+          </tr>
+        </thead>
+        <tbody id="rows">
+          <tr class="empty"><td colspan="3">Search a city and press Start.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <pre id="log"></pre>
+  </main>
+  <script src="renderer.js"></script>
+</body>
+</html>
