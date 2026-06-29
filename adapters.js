@@ -1,190 +1,348 @@
-// Brokerage adapter configs for the hidden-BrowserWindow scraper.
-//
-// Three types:
-//   single-page   — load one URL, extract all agents from the DOM
-//   follow-links  — load an index page, collect profile URLs, visit each for contact info
-//   paginated     — increment a page param until a page returns 0 new agents
+// adapters.js
+// Multi-Brokerage Agent Exporter
+// Drop-in replacement for the original KW-only adapters.js
+// Supports: KW, Berkshire Hathaway, Coldwell Banker, ReMax, Century 21,
+//           Compass, ERA, EXP, HomeSmart, Better Homes & Gardens, Realty ONE
 
-module.exports = [
-  // ----------------------------------------------------------------
-  // Meyer Lucas Real Estate
-  // Team page shows names only; each /agents/[slug] has the phone.
-  // ----------------------------------------------------------------
-  {
-    id: 'meyerlucas',
-    name: 'Meyer Lucas Real Estate',
-    brokerage: 'Meyer Lucas Real Estate',
-    type: 'follow-links',
-    indexUrl: 'https://meyerlucas.com/team',
-    indexWaitMs: 2500,
-    // Returns an array of absolute profile URLs
-    extractLinks: `(() => {
-      const links = new Set();
-      document.querySelectorAll('a[href*="/agents/"]').forEach(a => {
-        const m = a.href.match(/\\/agents\\/([^/?#]+)/);
-        if (m && m[1]) links.add(a.href.split('?')[0].split('#')[0]);
-      });
-      return [...links];
-    })()`,
-    profileWaitMs: 2000,
-    // Returns { name, phone } for a single profile page
-    extractProfile: `(() => {
-      const name = (document.querySelector('h1') || document.querySelector('h2'))?.innerText?.trim() || '';
-      const tels = [...document.querySelectorAll('a[href^="tel:"]')];
-      const phone = tels[0]?.href?.replace('tel:', '').trim() || '';
-      return { name, phone };
-    })()`,
-  },
+const ADAPTERS = {
 
-  // ----------------------------------------------------------------
-  // Jupiter Lighthouse Realty
-  // Static HTML — h3 names, tel: links in adjacent list items.
-  // Office phone is shared (first tel:); cell is usually second.
-  // ----------------------------------------------------------------
-  {
-    id: 'jupiterfl',
-    name: 'Jupiter Lighthouse Realty',
-    brokerage: 'Jupiter Lighthouse Realty',
-    type: 'single-page',
-    url: 'https://www.jupiterflrealestate.com/our-agents/',
-    waitMs: 1500,
-    extractAgents: `(() => {
+  // ─────────────────────────────────────────────────────────────
+  // KELLER WILLIAMS
+  // ─────────────────────────────────────────────────────────────
+  kw: {
+    id: 'kw',
+    label: 'Keller Williams (KW)',
+    searchUrl: ({ city, state, page = 1 }) =>
+      `https://www.kw.com/agent/search?city=${encodeURIComponent(city)}&state=${encodeURIComponent(state)}&page=${page}`,
+    waitForSelector: '.agent-card, .agent-search-results',
+    paginationType: 'page',       // 'page' | 'loadmore' | 'scroll'
+    pageParam: 'page',
+    parseAgents: (document) => {
       const agents = [];
-      document.querySelectorAll('h3').forEach(h3 => {
-        const name = h3.innerText.trim();
-        if (!name || name.length < 3) return;
-        // Walk up until we find a container that has tel: links
-        let el = h3.parentElement;
-        for (let i = 0; i < 7; i++) {
-          if (!el) break;
-          const tels = el.querySelectorAll('a[href^="tel:"]');
-          if (tels.length > 0) {
-            // Second tel: is usually the individual cell; first is shared office
-            const phone = (tels[1] || tels[0]).href.replace('tel:', '').trim();
-            if (phone) { agents.push({ name, phone }); break; }
-          }
-          el = el.parentElement;
-        }
-      });
-      return agents;
-    })()`,
-  },
-
-  // ----------------------------------------------------------------
-  // Hughes Browne Group
-  // Static HTML — heading elements for names, tel: links for phones.
-  // ----------------------------------------------------------------
-  {
-    id: 'hughesbrowne',
-    name: 'Hughes Browne Group',
-    brokerage: 'Hughes Browne Group',
-    type: 'single-page',
-    url: 'https://hughesbrownegroup.com/team',
-    waitMs: 2000,
-    extractAgents: `(() => {
-      const agents = [];
-      const seen = new Set();
-      document.querySelectorAll('a[href^="tel:"]').forEach(tel => {
-        const phone = tel.href.replace('tel:', '').trim();
-        if (!phone) return;
-        // Walk up to find the nearest heading sibling/ancestor
-        let el = tel.parentElement;
-        for (let i = 0; i < 8; i++) {
-          if (!el) break;
-          const h = el.querySelector('h1, h2, h3, h4, h5');
-          if (h) {
-            const name = h.innerText.trim();
-            const key = name + '|' + phone;
-            if (name && !seen.has(key)) { seen.add(key); agents.push({ name, phone }); }
-            return;
-          }
-          el = el.parentElement;
-        }
-      });
-      return agents;
-    })()`,
-  },
-
-  // ----------------------------------------------------------------
-  // Engel & Völkers Jupiter
-  // React-rendered, paginated via ?currentPage=N.
-  // scraper-preload.js intercepts fetch/XHR — if the site loads agent
-  // data from an internal API the captured JSON is checked first.
-  // Falls back to DOM selectors if no API data is found.
-  // ----------------------------------------------------------------
-  {
-    id: 'ev-jupiter',
-    name: 'Engel & Völkers Jupiter',
-    brokerage: 'Engel & Völkers Jupiter',
-    type: 'paginated',
-    urlFn: (page) => `https://jupiter.evrealestate.com/en/our-advisors?currentPage=${page}`,
-    startPage: 1,
-    waitMs: 4000,
-    extractAgents: `(() => {
-      // ── 1. Try captured API responses (React sites often fetch from /api/…) ──
-      const captured = window.__kwCapturedResponses || {};
-      for (const [url, body] of Object.entries(captured)) {
-        const u = url.toLowerCase();
-        if (!u.includes('advisor') && !u.includes('agent') && !u.includes('member')) continue;
-        try {
-          const d = JSON.parse(body);
-          const items =
-            d?.data?.advisors || d?.advisors ||
-            d?.data?.agents   || d?.agents   ||
-            d?.data?.members  || d?.members  ||
-            d?.results || d?.items ||
-            (Array.isArray(d) ? d : null);
-          if (Array.isArray(items) && items.length > 0) {
-            return items.map(item => ({
-              name: [item.firstName, item.lastName].filter(Boolean).join(' ') ||
-                    item.fullName || item.name || item.displayName || '',
-              phone: item.mobilePhone || item.phone || item.cell || item.phoneNumber || ''
-            })).filter(a => a.name);
-          }
-        } catch (_) {}
-      }
-
-      // ── 2. Class-based DOM selectors ──
-      const agents = [];
-      const seen = new Set();
-      const add = (name, phone) => {
-        const k = name + '|' + phone;
-        if (name && name.length > 2 && !seen.has(k)) { seen.add(k); agents.push({ name, phone }); }
-      };
-
-      for (const sel of [
-        '[class*="advisor"]', '[class*="Advisor"]',
-        '[class*="agent-card"]', '[class*="AgentCard"]',
-        '[class*="team-member"]', '[class*="TeamMember"]',
-        '[class*="staff-card"]', '[class*="card"]',
-      ]) {
-        const cards = document.querySelectorAll(sel);
-        if (cards.length < 2) continue;
-        cards.forEach(card => {
-          const nameEl = card.querySelector('h1, h2, h3, h4, h5, [class*="name"], [class*="Name"]');
-          const name = nameEl?.innerText?.trim() || '';
-          const tel = card.querySelector('a[href^="tel:"]');
-          const phone = tel?.href?.replace('tel:', '').trim() || '';
-          add(name, phone);
+      document.querySelectorAll('.agent-card').forEach(card => {
+        agents.push({
+          name:   card.querySelector('.agent-name')?.textContent?.trim() || '',
+          phone:  card.querySelector('.agent-phone')?.textContent?.trim() || '',
+          email:  card.querySelector('.agent-email')?.textContent?.trim() || '',
+          office: card.querySelector('.agent-office')?.textContent?.trim() || '',
+          brokerage: 'Keller Williams',
         });
-        if (agents.length > 0) break;
-      }
-
-      // ── 3. Broadest fallback: walk up from every tel: link ──
-      if (!agents.length) {
-        document.querySelectorAll('a[href^="tel:"]').forEach(tel => {
-          const phone = tel.href.replace('tel:', '').trim();
-          let el = tel.parentElement;
-          for (let i = 0; i < 8; i++) {
-            if (!el) break;
-            const h = el.querySelector('h1, h2, h3, h4, h5, strong');
-            if (h) { add(h.innerText.trim(), phone); return; }
-            el = el.parentElement;
-          }
-        });
-      }
-
+      });
       return agents;
-    })()`,
+    },
+    hasNextPage: (document) =>
+      !!document.querySelector('[aria-label="Next page"], .pagination-next:not(.disabled)'),
   },
-];
+
+  // ─────────────────────────────────────────────────────────────
+  // BERKSHIRE HATHAWAY HOME SERVICES
+  // ─────────────────────────────────────────────────────────────
+  berkshire: {
+    id: 'berkshire',
+    label: 'Berkshire Hathaway HomeServices',
+    searchUrl: ({ city, state, page = 1 }) =>
+      `https://www.bhhs.com/luxury-real-estate-agents/${state.toLowerCase()}/${city.toLowerCase().replace(/\s+/g, '-')}?pg=${page}`,
+    waitForSelector: '.agent-card, .AgentCard, [data-test="agent-card"]',
+    paginationType: 'page',
+    pageParam: 'pg',
+    parseAgents: (document) => {
+      const agents = [];
+      // BHHS uses multiple possible class names across regions
+      const cards = document.querySelectorAll(
+        '.agent-card, .AgentCard, [data-test="agent-card"], .agent-listing'
+      );
+      cards.forEach(card => {
+        agents.push({
+          name:   card.querySelector('.agent-name, .AgentCard__name, h3, h2')?.textContent?.trim() || '',
+          phone:  card.querySelector('.agent-phone, [href^="tel:"]')?.textContent?.trim() || '',
+          email:  card.querySelector('.agent-email, [href^="mailto:"]')?.textContent?.trim() || '',
+          office: card.querySelector('.agent-office, .office-name')?.textContent?.trim() || '',
+          brokerage: 'Berkshire Hathaway HomeServices',
+        });
+      });
+      return agents;
+    },
+    hasNextPage: (document) =>
+      !!document.querySelector('.pagination-next:not(.disabled), [rel="next"]'),
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // COLDWELL BANKER
+  // ─────────────────────────────────────────────────────────────
+  coldwellbanker: {
+    id: 'coldwellbanker',
+    label: 'Coldwell Banker',
+    searchUrl: ({ city, state, page = 1 }) =>
+      `https://www.coldwellbanker.com/agents/${state.toLowerCase()}/${city.toLowerCase().replace(/\s+/g, '-')}?startIndex=${(page - 1) * 20}`,
+    waitForSelector: '.agent-card, .CB-AgentCard, [data-testid="agent-card"]',
+    paginationType: 'offset',
+    pageSize: 20,
+    parseAgents: (document) => {
+      const agents = [];
+      document.querySelectorAll(
+        '.agent-card, .CB-AgentCard, [data-testid="agent-card"]'
+      ).forEach(card => {
+        agents.push({
+          name:   card.querySelector('.agent-name, .CB-AgentCard__name')?.textContent?.trim() || '',
+          phone:  card.querySelector('[href^="tel:"]')?.getAttribute('href')?.replace('tel:', '') || '',
+          email:  card.querySelector('[href^="mailto:"]')?.getAttribute('href')?.replace('mailto:', '') || '',
+          office: card.querySelector('.agent-office, .CB-AgentCard__office')?.textContent?.trim() || '',
+          brokerage: 'Coldwell Banker',
+        });
+      });
+      return agents;
+    },
+    hasNextPage: (document) =>
+      !!document.querySelector('.pagination-next:not([disabled]), [aria-label="Next"]'),
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // REMAX
+  // ─────────────────────────────────────────────────────────────
+  remax: {
+    id: 'remax',
+    label: 'RE/MAX',
+    searchUrl: ({ city, state, page = 1 }) =>
+      `https://www.remax.com/find-agents/results?city=${encodeURIComponent(city)}&state=${encodeURIComponent(state)}&page=${page}`,
+    waitForSelector: '.agent-card, [data-component="AgentCard"]',
+    paginationType: 'page',
+    pageParam: 'page',
+    parseAgents: (document) => {
+      const agents = [];
+      document.querySelectorAll(
+        '.agent-card, [data-component="AgentCard"], .agent-item'
+      ).forEach(card => {
+        agents.push({
+          name:   card.querySelector('.agent-name, h2, h3')?.textContent?.trim() || '',
+          phone:  card.querySelector('[href^="tel:"]')?.getAttribute('href')?.replace('tel:', '') || '',
+          email:  card.querySelector('[href^="mailto:"]')?.getAttribute('href')?.replace('mailto:', '') || '',
+          office: card.querySelector('.office-name, .agent-office')?.textContent?.trim() || '',
+          brokerage: 'RE/MAX',
+        });
+      });
+      return agents;
+    },
+    hasNextPage: (document) =>
+      !!document.querySelector('[aria-label="Next page"]:not([disabled]), .pagination__next:not(.disabled)'),
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // CENTURY 21
+  // ─────────────────────────────────────────────────────────────
+  century21: {
+    id: 'century21',
+    label: 'Century 21',
+    searchUrl: ({ city, state, page = 1 }) =>
+      `https://www.century21.com/real-estate-agents/${state.toLowerCase()}/${city.toLowerCase().replace(/\s+/g, '-')}/?pg=${page}`,
+    waitForSelector: '.agent-card, .C21AgentCard',
+    paginationType: 'page',
+    pageParam: 'pg',
+    parseAgents: (document) => {
+      const agents = [];
+      document.querySelectorAll('.agent-card, .C21AgentCard, [class*="AgentCard"]').forEach(card => {
+        agents.push({
+          name:   card.querySelector('.agent-name, h3')?.textContent?.trim() || '',
+          phone:  card.querySelector('[href^="tel:"]')?.getAttribute('href')?.replace('tel:', '') || '',
+          email:  card.querySelector('[href^="mailto:"]')?.getAttribute('href')?.replace('mailto:', '') || '',
+          office: card.querySelector('.office-name')?.textContent?.trim() || '',
+          brokerage: 'Century 21',
+        });
+      });
+      return agents;
+    },
+    hasNextPage: (document) =>
+      !!document.querySelector('.pagination-next, [rel="next"]:not(.disabled)'),
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // COMPASS
+  // ─────────────────────────────────────────────────────────────
+  compass: {
+    id: 'compass',
+    label: 'Compass',
+    searchUrl: ({ city, state, page = 1 }) =>
+      `https://www.compass.com/agents/${state.toLowerCase()}/${city.toLowerCase().replace(/\s+/g, '-')}/?page=${page}`,
+    waitForSelector: '[data-eid="agentCard"], .agent-card',
+    paginationType: 'page',
+    pageParam: 'page',
+    parseAgents: (document) => {
+      const agents = [];
+      document.querySelectorAll('[data-eid="agentCard"], [class*="AgentCard"]').forEach(card => {
+        agents.push({
+          name:   card.querySelector('[data-eid="agentName"], h3, h2')?.textContent?.trim() || '',
+          phone:  card.querySelector('[href^="tel:"]')?.getAttribute('href')?.replace('tel:', '') || '',
+          email:  card.querySelector('[href^="mailto:"]')?.getAttribute('href')?.replace('mailto:', '') || '',
+          office: card.querySelector('[data-eid="officeName"]')?.textContent?.trim() || '',
+          brokerage: 'Compass',
+        });
+      });
+      return agents;
+    },
+    hasNextPage: (document) =>
+      !!document.querySelector('[aria-label="Next page"]:not([aria-disabled="true"])'),
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // ERA REAL ESTATE
+  // ─────────────────────────────────────────────────────────────
+  era: {
+    id: 'era',
+    label: 'ERA Real Estate',
+    searchUrl: ({ city, state, page = 1 }) =>
+      `https://www.era.com/find-agents/${state.toLowerCase()}/${city.toLowerCase().replace(/\s+/g, '-')}?page=${page}`,
+    waitForSelector: '.agent-card, .ERA-AgentCard',
+    paginationType: 'page',
+    pageParam: 'page',
+    parseAgents: (document) => {
+      const agents = [];
+      document.querySelectorAll('.agent-card, .ERA-AgentCard, [class*="agent-card"]').forEach(card => {
+        agents.push({
+          name:   card.querySelector('.agent-name, h3')?.textContent?.trim() || '',
+          phone:  card.querySelector('[href^="tel:"]')?.getAttribute('href')?.replace('tel:', '') || '',
+          email:  card.querySelector('[href^="mailto:"]')?.getAttribute('href')?.replace('mailto:', '') || '',
+          office: card.querySelector('.office-name')?.textContent?.trim() || '',
+          brokerage: 'ERA Real Estate',
+        });
+      });
+      return agents;
+    },
+    hasNextPage: (document) =>
+      !!document.querySelector('.pagination-next:not(.disabled), [rel="next"]'),
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // EXP REALTY  (big with investors/fix & flip)
+  // ─────────────────────────────────────────────────────────────
+  exp: {
+    id: 'exp',
+    label: 'eXp Realty',
+    searchUrl: ({ city, state, page = 1 }) =>
+      `https://exprealty.com/agents/?city=${encodeURIComponent(city)}&state=${encodeURIComponent(state)}&pg=${page}`,
+    waitForSelector: '.agent-card, [class*="AgentCard"]',
+    paginationType: 'page',
+    pageParam: 'pg',
+    parseAgents: (document) => {
+      const agents = [];
+      document.querySelectorAll('.agent-card, [class*="AgentCard"], .agent-item').forEach(card => {
+        agents.push({
+          name:   card.querySelector('.agent-name, h2, h3')?.textContent?.trim() || '',
+          phone:  card.querySelector('[href^="tel:"]')?.getAttribute('href')?.replace('tel:', '') || '',
+          email:  card.querySelector('[href^="mailto:"]')?.getAttribute('href')?.replace('mailto:', '') || '',
+          office: card.querySelector('.office-name')?.textContent?.trim() || '',
+          brokerage: 'eXp Realty',
+        });
+      });
+      return agents;
+    },
+    hasNextPage: (document) =>
+      !!document.querySelector('.pagination-next:not(.disabled)'),
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // HOMESMART  (active in investor/fix-flip markets)
+  // ─────────────────────────────────────────────────────────────
+  homesmart: {
+    id: 'homesmart',
+    label: 'HomeSmart',
+    searchUrl: ({ city, state, page = 1 }) =>
+      `https://www.homesmart.com/find-an-agent/?city=${encodeURIComponent(city)}&state=${encodeURIComponent(state)}&page=${page}`,
+    waitForSelector: '.agent-card, .hs-agent-card',
+    paginationType: 'page',
+    pageParam: 'page',
+    parseAgents: (document) => {
+      const agents = [];
+      document.querySelectorAll('.agent-card, .hs-agent-card, [class*="agent"]').forEach(card => {
+        agents.push({
+          name:   card.querySelector('.agent-name, h3')?.textContent?.trim() || '',
+          phone:  card.querySelector('[href^="tel:"]')?.getAttribute('href')?.replace('tel:', '') || '',
+          email:  card.querySelector('[href^="mailto:"]')?.getAttribute('href')?.replace('mailto:', '') || '',
+          office: card.querySelector('.office-name, .agent-office')?.textContent?.trim() || '',
+          brokerage: 'HomeSmart',
+        });
+      });
+      return agents;
+    },
+    hasNextPage: (document) =>
+      !!document.querySelector('.pagination-next, [rel="next"]'),
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // BETTER HOMES & GARDENS REAL ESTATE
+  // ─────────────────────────────────────────────────────────────
+  bhg: {
+    id: 'bhg',
+    label: 'Better Homes & Gardens Real Estate',
+    searchUrl: ({ city, state, page = 1 }) =>
+      `https://www.bhgrealestate.com/agents/${state.toLowerCase()}/${city.toLowerCase().replace(/\s+/g, '-')}?page=${page}`,
+    waitForSelector: '.agent-card, [class*="AgentCard"]',
+    paginationType: 'page',
+    pageParam: 'page',
+    parseAgents: (document) => {
+      const agents = [];
+      document.querySelectorAll('.agent-card, [class*="AgentCard"]').forEach(card => {
+        agents.push({
+          name:   card.querySelector('.agent-name, h2, h3')?.textContent?.trim() || '',
+          phone:  card.querySelector('[href^="tel:"]')?.getAttribute('href')?.replace('tel:', '') || '',
+          email:  card.querySelector('[href^="mailto:"]')?.getAttribute('href')?.replace('mailto:', '') || '',
+          office: card.querySelector('.office-name')?.textContent?.trim() || '',
+          brokerage: 'Better Homes & Gardens Real Estate',
+        });
+      });
+      return agents;
+    },
+    hasNextPage: (document) =>
+      !!document.querySelector('.pagination-next:not(.disabled)'),
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // REALTY ONE GROUP  (strong in investor markets, SW / TX)
+  // ─────────────────────────────────────────────────────────────
+  realtyone: {
+    id: 'realtyone',
+    label: 'Realty ONE Group',
+    searchUrl: ({ city, state, page = 1 }) =>
+      `https://www.realtyonegroup.com/find-an-agent/?city=${encodeURIComponent(city)}&state=${encodeURIComponent(state)}&page=${page}`,
+    waitForSelector: '.agent-card, [class*="agent"]',
+    paginationType: 'page',
+    pageParam: 'page',
+    parseAgents: (document) => {
+      const agents = [];
+      document.querySelectorAll('.agent-card, [class*="agent-card"]').forEach(card => {
+        agents.push({
+          name:   card.querySelector('.agent-name, h3')?.textContent?.trim() || '',
+          phone:  card.querySelector('[href^="tel:"]')?.getAttribute('href')?.replace('tel:', '') || '',
+          email:  card.querySelector('[href^="mailto:"]')?.getAttribute('href')?.replace('mailto:', '') || '',
+          office: card.querySelector('.office-name')?.textContent?.trim() || '',
+          brokerage: 'Realty ONE Group',
+        });
+      });
+      return agents;
+    },
+    hasNextPage: (document) =>
+      !!document.querySelector('.pagination-next:not(.disabled)'),
+  },
+
+};
+
+// ─────────────────────────────────────────────────────────────
+// Export helpers
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Returns array of all adapter definitions for populating the UI dropdown.
+ */
+function getAdapterList() {
+  return Object.values(ADAPTERS).map(a => ({ id: a.id, label: a.label }));
+}
+
+/**
+ * Returns a single adapter by ID, or null if not found.
+ */
+function getAdapter(id) {
+  return ADAPTERS[id] || null;
+}
+
+// Node/Electron export
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { ADAPTERS, getAdapterList, getAdapter };
+}
